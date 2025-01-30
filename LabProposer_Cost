@@ -1,0 +1,47 @@
+with eth_transfer_raw as (
+    select block_time, "from" as address, (-1) * cast(value as decimal(38, 0)) as amount, 'send' as transfer_type
+    from ethereum.traces
+    where (call_type is null or call_type not in ('delegatecall', 'callcode', 'staticcall'))
+        and success = true
+        and value > uint256 '0'
+        and "from" = {{proposer_eoa}}
+    union all
+    
+    select block_time, "to" as address, cast(value as decimal(38, 0)) as amount, 'receive' as transfer_type
+    from ethereum.traces
+    where (call_type is null or call_type not in ('delegatecall', 'callcode', 'staticcall'))
+        and success = true
+        and value > uint256 '0'
+        and "to" = {{proposer_eoa}}
+    
+    union all
+    
+    select block_time, "from" as address, (-1) * cast(gas_price as double) * gas_used as amount, 'gas fee' as transfer_type
+    from ethereum.transactions
+    where success = true
+        and "from" = {{proposer_eoa}}
+),
+
+eth_balance_daily as (
+    select date_trunc('day', block_time) as block_date,
+        sum(amount) as balance_amount
+    from eth_transfer_raw
+    group by 1
+    order by 1
+),
+
+eth_transfer_daily as (
+    select date_trunc('day', block_time) as block_date,
+        transfer_type,
+        sum(amount) as transfer_amount
+    from eth_transfer_raw
+    group by 1, 2
+    order by 1, 2
+)
+
+select block_date,
+    transfer_type,
+    cast(transfer_amount / 1e18 as double) as transfer_amount
+from eth_transfer_daily
+order by 1, 2
+limit 90
